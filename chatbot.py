@@ -59,12 +59,16 @@ def num_tokens_from_string(string: str, encoding_name: str) -> int:
 # Helper function to extract sentiment from assistant message
 def extract_sentiment(assistant_message):
     # Use regular expressions to find sentiment in the assistant message
-    match = re.search(r'Sentiment: (\w+)', assistant_message)
+    match = re.search(r'Sentiment:\s*(\w+)', assistant_message)
     if match:
         sentiment = match.group(1)
     else:
         sentiment = 'Neutral'  # Default to neutral if no sentiment found
+    
+    # print(f"Assistant message: {assistant_message}")
+    # print(f"Matched sentiment: {sentiment}")
     return sentiment
+
 
 # Main function to generate text from OpenAI
 async def get_text(prompt):
@@ -94,13 +98,27 @@ async def get_text(prompt):
                     if response.status_code == 200:
                         assistant_text = ""
                         async for line in response.aiter_lines():
-                            if line.startswith("data: "):
+                            if line.startswith("data: "): 
                                 message = line[6:]
+        
                                 if message == "[DONE]":
+                                    # print("Streamed response: [DONE]")
                                     break
                                 else:
+                                    # print(f"Streamed response: {message}")
+                                    try:
+                                        data = json.loads(message)['choices'][0]
+                                    except json.JSONDecodeError as e:
+                                        # print(f"JSONDecodeError: {e}, Message: {message}")
+                                        continue
+
+                                    
+                                    # Check if the delta dictionary is empty
+                                    if not data.get('delta'):
+                                        # print("Received an empty delta dictionary. Skipping this chunk.")
+                                        continue
+                                    
                                     # Process each chunk of the response
-                                    data = json.loads(message)['choices'][0]
                                     chunk_data = data['delta']
 
                                     # Monitor finish_reason
@@ -113,13 +131,8 @@ async def get_text(prompt):
                                         chunk = chunk_data['content']
                                         assistant_text += chunk
 
-                                        # Handle chunks that are markdown code blocks
-                                        if "```" in chunk:
-                                            md = Markdown(chunk, inline_code_lexer="python")
-                                            print(md)
-                                        else:
-                                            sys.stdout.write(chunk)
-                                            sys.stdout.flush()
+                                        sys.stdout.write(chunk)
+                                        sys.stdout.flush()
 
                         # Extract sentiment from the assistant's response
                         sentiment = extract_sentiment(assistant_text)
@@ -162,33 +175,35 @@ async def get_text(prompt):
                         retry_after = int(response.headers.get('Retry-After', 1))
                         print(f"OpenAI API request exceeded rate limit: {error_data}")
                         time.sleep(retry_after)
-                        continue
                     else:
-                        # Handle unexpected errors
-                        print(f"Unexpected error: {response.status_code}")
+                        # Handle any other unexpected error
+                        await response.read()
+                        error_data = await response.json()
+                        print(f"OpenAI API returned an unexpected error: {error_data}")
                         break
-        except httpx.RequestError as e:
-            print(f"Failed to connect to OpenAI API: {e}")
+        except Exception as e:
+            # Handle any other exceptions that may occur
+            print(f"Error occurred while processing API request: {e}, Line: {sys.exc_info()[-1].tb_lineno}")
+
             break
 
-# Main function
+# Main loop to handle user input and assistant responses
 async def main():
-    try:
-        while True:
-            user_input = input('\nEnter a question: ')
+    while True:
+        # Get user input
+        user_input = input("\n\nUser: ")
 
-            if not user_input.strip():
-                print("You've entered an empty string. Please enter a valid question.")
-                continue
-                
-            if user_input.lower() == 'quit':
-                break
+        # Exit the loop if the user types "quit"
+        if user_input.lower().strip() == "quit":
+            break
 
-            response_text = await get_text(user_input)
-    except KeyboardInterrupt:
-        print("\nExiting gracefully...")
-        sys.exit(0)
+        # Get the assistant's response
+        assistant_response = await get_text(user_input)
 
-if __name__ == '__main__':
+        # Print the assistant's response
+        # print(f"\nAssistant: {assistant_response}")
+
+if __name__ == "__main__":
     import asyncio
     asyncio.run(main())
+
